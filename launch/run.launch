@@ -1,0 +1,16 @@
+<launch>
+
+    <arg name="project" default="lexicographic_planning"/>
+
+    <!-- Parameters -->
+    <rosparam file="$(find lexicographic_planning)/config/params.yaml" command="load" />
+
+    <!--- Run Rviz -->
+    <node pkg="rviz" type="rviz" name="$(arg project)_rviz" args="-d $(find lexicographic_planning)/rviz_cfg/rviz.rviz" />
+
+    <!--- Package -->
+    <!-- <node pkg="$(arg project)" type="$(arg project)_pathPlanning"   name="$(arg project)_pathPlanning"     output="screen" respawn="false"/> -->
+    
+    <node pkg="$(arg project)" type="$(arg project)_obstacleServer" name="$(arg project)_obstacleServer"   output="screen" respawn="false"/>
+
+</launch>
