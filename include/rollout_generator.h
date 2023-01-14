@@ -361,10 +361,7 @@ private:
     double calcAngleAndCost(vector<UtilityNS::WayPoint>& path);
 
     void extractPartFromTrajectory(const vector<UtilityNS::WayPoint>& originalPath,
-        const UtilityNS::WayPoint& currnetPos,
-        const double& minDistance,
-        const double& waypointDensity,
-        vector<UtilityNS::WayPoint>& extractedPath);
+        const double& waypointDensity, vector<UtilityNS::WayPoint>& extractedPath);
 
     void fixPathDensity(vector<UtilityNS::WayPoint>& path, const double& pathDensity);
     nav_msgs::Path fixPathDensity(nav_msgs::Path path);
@@ -372,20 +369,16 @@ private:
     void trajectoryToMarkers(const vector<vector<vector<UtilityNS::WayPoint>>>& paths, visualization_msgs::MarkerArray& markerArray);
 
     void generateRunoffTrajectory(const vector<vector<UtilityNS::WayPoint>>& referencePaths,
-        const UtilityNS::WayPoint& carPos, const double& speed, const double& microPlanDistance,
-        const double& carTipMargin, const double& rollInMargin, const double& rollInSpeedFactor,
-        const double& pathDensity, const double& rollOutDensity, const int& rollOutNumber,
-        const double& SmoothDataWeight, const double& SmoothWeight, const double& SmoothTolerance,
-        vector<vector<vector<UtilityNS::WayPoint>>>& rollOutsPaths,
-        vector<UtilityNS::WayPoint>& sampledPoints_debug);
+        const double& speed, const double& carTipMargin, const double& rollInMargin,
+        const double& rollInSpeedFactor, const double& pathDensity, const double& rollOutDensity,
+        const int& rollOutNumber, const double& SmoothDataWeight, const double& SmoothWeight,
+        const double& SmoothTolerance, vector<vector<vector<UtilityNS::WayPoint>>>& rollOutsPaths);
 
-    void calculateRollInTrajectories(const UtilityNS::WayPoint& carPos, const double& speed, const vector<UtilityNS::WayPoint>& originalCenter,
-        int& start_index, int& end_index, vector<double>& end_laterals,
-        vector<vector<UtilityNS::WayPoint>>& rollInPaths, const double& max_roll_distance,
+    void calculateRollInTrajectories(const double& speed, const vector<UtilityNS::WayPoint>& originalCenter,
+        vector<vector<UtilityNS::WayPoint>>& rollInPaths,
         const double& carTipMargin, const double& rollInMargin, const double& rollInSpeedFactor,
         const double& pathDensity, const double& rollOutDensity, const int& rollOutNumber,
-        const double& SmoothDataWeight, const double& SmoothWeight, const double& SmoothTolerance,
-        vector<UtilityNS::WayPoint>& sampledPoints);
+        const double& SmoothDataWeight, const double& SmoothWeight, const double& SmoothTolerance);
 
     void smoothPath(vector<UtilityNS::WayPoint>& path, double weight_data, double weight_smooth, double tolerance);
 
@@ -399,7 +392,7 @@ public:
     nav_msgs::Path getRemainingPath(nav_msgs::Path pathIn, nav_msgs::Path centerPath);
     nav_msgs::Path calculatePathYaw(nav_msgs::Path pathIn);
 
-    void run(tf::StampedTransform transform, nav_msgs::Path pathMsg, nav_msgs::Path& fixedGlobal, nav_msgs::Path& centerPath, nav_msgs::Path& remainingPath, vector<nav_msgs::Path>& alternativePaths);
+    void run(nav_msgs::Path pathMsg, vector<nav_msgs::Path>& alternativePaths);
 
     void initROS();
 

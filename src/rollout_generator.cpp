@@ -233,15 +233,7 @@ void RolloutGenerator::initROS() {
 }
 
 /* 主循环函数*/
-void RolloutGenerator::run(tf::StampedTransform transform, nav_msgs::Path pathMsg,
-    nav_msgs::Path& fixedGlobal, nav_msgs::Path& centerPath, nav_msgs::Path& remainingPath,
-    vector<nav_msgs::Path>& alternativePaths) {
-
-    // get robot pose
-    current_pose.pos.x = transform.getOrigin().x();
-    current_pose.pos.y = transform.getOrigin().y();
-    current_pose.pos.z = transform.getOrigin().z();
-    current_pose.pos.yaw = tf::getYaw(transform.getRotation());
+void RolloutGenerator::run(nav_msgs::Path pathMsg, vector<nav_msgs::Path>& alternativePaths) {
 
     // 把 trajectory 信息（包括每个路径点的 x,y,z,yaw,cost）写入 globalPaths
     getGlobalPlannerPath_cb(pathMsg);
@@ -249,21 +241,18 @@ void RolloutGenerator::run(tf::StampedTransform transform, nav_msgs::Path pathMs
         return;
     }
 
-    // 从 globalPaths[i] 截取局部路径 centralTrajectorySmoothed，对局部路径插值并计算 angle and cost。
+    // 从 globalPaths[i] 拷贝到局部路径 centralTrajectorySmoothed，对局部路径插值并计算 angle and cost。
     globalPathSections.clear();
     for (size_t i = 0; i < globalPaths.size(); i++) {
         centralTrajectorySmoothed.clear();
-        extractPartFromTrajectory(globalPaths[i], current_pose, PlanningParams.microPlanDistance,
+        extractPartFromTrajectory(globalPaths[i],
             PlanningParams.pathDensity, centralTrajectorySmoothed);  // 10.0, 0.1,
         globalPathSections.push_back(centralTrajectorySmoothed);
     }
 
     // 由 globalPathSections 生成 16 条先扇形展开后扇形收敛的 rollouts，并平滑*/
-    vector<UtilityNS::WayPoint> sampled_points;
     generateRunoffTrajectory(globalPathSections,
-        current_pose,
         speed,                                   // 1
-        PlanningParams.microPlanDistance,        // 10.0
         PlanningParams.carTipMargin,             // 0.5
         PlanningParams.rollInMargin,             // 0.2
         PlanningParams.speedProfileFactor,       // 1.2
@@ -273,22 +262,8 @@ void RolloutGenerator::run(tf::StampedTransform transform, nav_msgs::Path pathMs
         PlanningParams.smoothingDataWeight,      // 0.45
         PlanningParams.smoothingSmoothWeight,    // 0.4
         PlanningParams.smoothingToleranceError,  // 0.05
-        rollOuts,
-        sampled_points);                         // uselesss
+        rollOuts);
 
-    // pub lcoal rollouts in rviz
-    if (pub_localTrajectoriesRviz.getNumSubscribers() != 0) {
-        visualization_msgs::MarkerArray marker_rollouts;
-        trajectoryToMarkers(rollOuts, marker_rollouts);
-        pub_localTrajectoriesRviz.publish(marker_rollouts);
-    }
-
-    // 根据 PlanningParams.pathDensity 对 trajectory 插值
-    fixedGlobal = fixPathDensity(pathMsg);
-    // 将局部路径转化为 nav_msgs::Path 格式
-    centerPath = getCenterPath(centralTrajectorySmoothed);
-    // 截取 trajectory 中局部路径之后的部分
-    remainingPath = getRemainingPath(fixedGlobal, centerPath);
     // 将 16 条 rollouts 转化为 vector<nav_msgs::Path> 数据格式
     alternativePaths = getOtherpaths(rollOuts[0]);
 
@@ -298,16 +273,6 @@ void RolloutGenerator::run(tf::StampedTransform transform, nav_msgs::Path pathMs
     // remainingPath = calculatePathYaw(remainingPath);
     // for (int i = 0; i < alternativePaths.size(); ++i)
     //     alternativePaths[i] = calculatePathYaw(alternativePaths[i]);
-
-    if (pub_global_path.getNumSubscribers() != 0) {
-        pub_global_path.publish(fixedGlobal);
-    }
-    if (pub_center_path.getNumSubscribers() != 0) {
-        pub_center_path.publish(centerPath);
-    }
-    if (pub_remaining_path.getNumSubscribers() != 0) {
-        pub_remaining_path.publish(remainingPath);
-    }
 }
 
 nav_msgs::Path RolloutGenerator::calculatePathYaw(nav_msgs::Path pathIn)
@@ -461,9 +426,7 @@ void RolloutGenerator::trajectoryToMarkers(const vector<vector<vector<UtilityNS:
 
 /* 生成候选局部规划路径 rollouts*/
 void RolloutGenerator::generateRunoffTrajectory(const vector<vector<UtilityNS::WayPoint>>& referencePaths,
-    const UtilityNS::WayPoint& carPos,
     const double& speed,              // 1
-    const double& microPlanDistance,  // 10.0
     const double& carTipMargin,       // 0.5
     const double& rollInMargin,       // 0.2
     const double& rollInSpeedFactor,  // 1.2
@@ -473,38 +436,30 @@ void RolloutGenerator::generateRunoffTrajectory(const vector<vector<UtilityNS::W
     const double& SmoothDataWeight,   // 0.45
     const double& SmoothWeight,       // 0.4
     const double& SmoothTolerance,    // 0.05
-    vector<vector<vector<UtilityNS::WayPoint>>>& rollOutsPaths,  // 每条 referencePaths 包含多条 rollOutsPaths
-    vector<UtilityNS::WayPoint>& sampledPoints_debug) {  // useless
+    vector<vector<vector<UtilityNS::WayPoint>>>& rollOutsPaths) {  // 每条 referencePaths 包含多条 rollOutsPaths
 
-    if ((referencePaths.size() == 0) || (microPlanDistance <= 0)) {
+    if ((referencePaths.size() == 0)) {
         return;
     }
 
     rollOutsPaths.clear();
-    sampledPoints_debug.clear();  // useless, not updated
     for (unsigned int i = 0; i < referencePaths.size(); i++) {
         vector<vector<UtilityNS::WayPoint>> local_rollOutPaths;
-        int s_index = 0, e_index = 0;
-        vector<double> e_distances;
         if (referencePaths.at(i).size() > 0) {
-            calculateRollInTrajectories(carPos, speed, referencePaths.at(i), s_index, e_index, e_distances,
-                local_rollOutPaths, microPlanDistance, carTipMargin, rollInMargin,
+            calculateRollInTrajectories(speed, referencePaths.at(i),
+                local_rollOutPaths, carTipMargin, rollInMargin,
                 rollInSpeedFactor, pathDensity, rollOutDensity, rollOutNumber,
-                SmoothDataWeight, SmoothWeight, SmoothTolerance, sampledPoints_debug);
+                SmoothDataWeight, SmoothWeight, SmoothTolerance);
         }
         rollOutsPaths.push_back(local_rollOutPaths);
     }
 }
 
 /* 由中心轨迹的采样点生成 16 条先扇形展开后扇形收敛的 rollouts，并平滑*/
-void RolloutGenerator::calculateRollInTrajectories(const UtilityNS::WayPoint& carPos,
+void RolloutGenerator::calculateRollInTrajectories(
     const double& speed,  // 1
     const vector<UtilityNS::WayPoint>& originalCenter,  // 截取出来的局部路径
-    int& start_index,              // useless, not updated
-    int& end_index,                // useless, not updated
-    vector<double>& end_laterals,  // useless, not updated
     vector<vector<UtilityNS::WayPoint>>& rollInPaths,   // 输出 rollouts
-    const double& max_roll_distance,  // 10.0
     const double& carTipMargin,       // 0.5
     const double& rollInMargin,       // 0.2
     const double& rollInSpeedFactor,  // 1.2
@@ -513,19 +468,11 @@ void RolloutGenerator::calculateRollInTrajectories(const UtilityNS::WayPoint& ca
     const int& rollOutNumber,         // 15
     const double& SmoothDataWeight,   // 0.45
     const double& SmoothWeight,       // 0.4
-    const double& SmoothTolerance,    // 0.05
-    vector<UtilityNS::WayPoint>& sampledPoints) {  // useless, not updated
-
-    // 计算当前位置到截取出来的局部路径的 info
-    UtilityNS::RelativeInfo info;
-    UtilityNS::getRelativeInfo(originalCenter, carPos, info);
+    const double& SmoothTolerance) {  // 0.05
 
     double remaining_distance = 0;  // trajectory 上剩余路程的长度
-    int close_index = info.iBack;   // 前一个点
-    for (unsigned int i = close_index; i < originalCenter.size() - 1; i++) {
-        if (i > 0) {
-            remaining_distance += distance2points(originalCenter[i].pos, originalCenter[i + 1].pos);
-        }
+    for (unsigned int i = 0; i < originalCenter.size() - 1; i++) {
+        remaining_distance += distance2points(originalCenter[i].pos, originalCenter[i + 1].pos);
     }
 
     // 计算 start_distance：第一段的长度
@@ -536,73 +483,65 @@ void RolloutGenerator::calculateRollInTrajectories(const UtilityNS::WayPoint& ca
 
     // 计算 far_index：第一段结束的 index
     double d_limit = 0;
-    unsigned int far_index = close_index;
-    for (unsigned int i = close_index; i < originalCenter.size(); i++) {
-        if (i > 0) {
-            d_limit += distance2points(originalCenter[i].pos, originalCenter[i - 1].pos);
-        }
+    unsigned int far_index = 0;
+    for (unsigned int i = 1; i < originalCenter.size(); i++) {
+        d_limit += distance2points(originalCenter[i].pos, originalCenter[i - 1].pos);
         if (d_limit >= start_distance) {
             far_index = i;
             break;
         }
     }
 
-    // 计算 16 条 rollout 路径到中心路径的距离
-    int centralTrajectoryIndex = rollOutNumber / 2;  // 15/2
+    // 计算 16 条 rollouts 路径到中心路径的距离
+    int centralTrajectoryIndex = rollOutNumber / 2;  // 15/2 = 7
     vector<double> end_distance_list;
-    for (int i = 0; i < rollOutNumber + 1; i++) {
-        double end_roll_in_distance = rollOutDensity * (i - centralTrajectoryIndex);  // 0.1*(i-8)
+    for (int i = 0; i < rollOutNumber + 1; i++) {  // 长 16
+        double end_roll_in_distance = rollOutDensity * (i - centralTrajectoryIndex);  // 0.1*(i-7)
         end_distance_list.push_back(end_roll_in_distance);
     }
 
     // 计算 smoothing_start_index：第一段开始的 index
     d_limit = 0;
-    unsigned int smoothing_start_index = close_index;
-    for (unsigned int i = close_index; i < originalCenter.size(); i++) {
-        if (i > 0) {
-            d_limit += distance2points(originalCenter[i].pos, originalCenter[i - 1].pos);
-        }
+    unsigned int smoothing_start_index = 0;
+    for (unsigned int i = 1; i < originalCenter.size(); i++) {
+        d_limit += distance2points(originalCenter[i].pos, originalCenter[i - 1].pos);
         if (d_limit > carTipMargin) {  // >0.5
+            smoothing_start_index = i;
             break;
         }
-        smoothing_start_index++;
     }
     // 计算 smoothing_end_index：第一段结束的 index
     d_limit = 0;
     unsigned int smoothing_end_index = far_index;
     for (unsigned int i = far_index; i < originalCenter.size(); i++) {
-        if (i > 0) {
-            d_limit += distance2points(originalCenter[i].pos, originalCenter[i - 1].pos);
-        }
+        d_limit += distance2points(originalCenter[i].pos, originalCenter[i - 1].pos);
         if (d_limit > carTipMargin) {  // >0.5
+            smoothing_end_index = i;
             break;
         }
-        smoothing_end_index++;
     }
     
     // 一些初始化
-    double initial_roll_in_distance = info.perp_distance;  // 估计的 car 到 trajectory 的距离
+    double initial_roll_in_distance = 0;  // car 到 trajectory 的距离
     int nSteps = far_index - smoothing_start_index;
     rollInPaths.clear();
     vector<double> inc_list;
     vector<double> inc_list_inc;
-    vector<vector<UtilityNS::WayPoint>> execluded_from_smoothing;
     for (int i = 0; i < rollOutNumber + 1; i++) {
         rollInPaths.push_back(vector<UtilityNS::WayPoint>());
-        double diff = end_distance_list.at(i) - initial_roll_in_distance;  // 0.1*(i-8)-irid
+        double diff = end_distance_list.at(i) - initial_roll_in_distance;  // 0.1*(i-7)-irid
         inc_list.push_back(diff / (double)nSteps);  // 扇形，距离越远，越扩散
         inc_list_inc.push_back(0);
-        execluded_from_smoothing.push_back(vector<UtilityNS::WayPoint>());
     }
 
-    // 第一段中，从 close_index 到 smoothing_start_index 这一部分
+    // 第一段中，从 0 到 smoothing_start_index 这一部分
     // 先平行于 trajectory 运动一小段路程
     UtilityNS::WayPoint p;
     int iLimitIndex = (carTipMargin / 0.3) / pathDensity;  // 16.666
     if (iLimitIndex >= originalCenter.size()) {
         iLimitIndex = originalCenter.size() - 1;
     }
-    for (unsigned int j = close_index; j < smoothing_start_index; j++) {
+    for (unsigned int j = 0; j < smoothing_start_index; j++) {
         p = originalCenter.at(j);
         double original_speed = p.v;  // 1
         for (unsigned int i = 0; i < rollOutNumber + 1; i++) {
@@ -615,12 +554,7 @@ void RolloutGenerator::calculateRollInTrajectories(const UtilityNS::WayPoint& ca
                 p.v = original_speed;  // 1
             }
 
-            if (j < iLimitIndex) {
-                execluded_from_smoothing.at(i).push_back(p);
-            }
-            else {
-                rollInPaths.at(i).push_back(p);  // 最终输出的
-            }
+            rollInPaths.at(i).push_back(p);  // 最终输出的
         }
     }
 
@@ -665,21 +599,10 @@ void RolloutGenerator::calculateRollInTrajectories(const UtilityNS::WayPoint& ca
         }
     }
 
-    // 很奇怪的写法，应该可以和上面合并。
-    for (unsigned int i = 0; i < rollOutNumber + 1; i++) {
-        rollInPaths.at(i).insert(rollInPaths.at(i).begin(),
-            execluded_from_smoothing.at(i).begin(), execluded_from_smoothing.at(i).end());
-    }
-
     // 第二段，平行于 trajectory
     d_limit = 0; 
     for (unsigned int j = smoothing_end_index; j < originalCenter.size(); j++) {
-        if (j > 0) {
-            d_limit += distance2points(originalCenter.at(j).pos, originalCenter.at(j - 1).pos);
-        }
-        if (d_limit > max_roll_distance) {  // >10
-            break;
-        }
+        d_limit += distance2points(originalCenter.at(j).pos, originalCenter.at(j - 1).pos);
         p = originalCenter.at(j);
         double original_speed = p.v;  // 1
         for (unsigned int i = 0; i < rollInPaths.size(); i++) {
@@ -698,12 +621,12 @@ void RolloutGenerator::calculateRollInTrajectories(const UtilityNS::WayPoint& ca
     }
 
     // 将第二段部分修正为第三段的末尾部分
-    // 功能等同于第一段的从 close_index 到 smoothing_start_index 这一部分
+    // 功能等同于第一段的从 0 到 smoothing_start_index 这一部分
     int path_length = rollInPaths[0].size();
-    int seg_num_2 = smoothing_start_index - close_index;  // 第一段中的第一部分
+    int seg_num_2 = smoothing_start_index;  // 第一段中的第一部分
     int j_start = path_length - seg_num_2;  // 剩余部分总和
     for (int j = j_start; j < path_length; j++) {
-        int origin_path_index = min(int(j + close_index), (int)originalCenter.size() - 1);
+        int origin_path_index = min(int(j), (int)originalCenter.size() - 1);
         p = originalCenter.at(origin_path_index);
         double original_speed = p.v;
         for (int i = 0; i < rollOutNumber + 1; i++) {
@@ -736,28 +659,27 @@ void RolloutGenerator::calculateRollInTrajectories(const UtilityNS::WayPoint& ca
     // 将第二段部分修正为第三段的倒数第二部分
     // 功能等同于第一段的从 smoothing_start_index 到 far_index 这一部分
     int seg_num_1 = far_index - smoothing_start_index;  // 第一段中的第二部分（扇形展开）
-    if (seg_num_1 > 0) {
-        int j_start = max(path_length - seg_num_2 - seg_num_1, int(smoothing_start_index - close_index));
-        for (int j = j_start; j < path_length - seg_num_2; j++) {
-            int origin_path_index = min(int(j + close_index), (int)originalCenter.size() - 1);
-            p = originalCenter.at(origin_path_index);
-            double original_speed = p.v;
-            for (int i = 0; i < rollOutNumber + 1; i++) {
-                inc_list_inc[i] -= inc_list[i];
-                double d = inc_list_inc[i];
-                p.pos.x = originalCenter.at(origin_path_index).pos.x - d * cos(p.pos.yaw + M_PI_2);
-                p.pos.y = originalCenter.at(origin_path_index).pos.y - d * sin(p.pos.yaw + M_PI_2);
-                if (i != centralTrajectoryIndex) {
-                    p.v = original_speed * LANE_CHANGE_SPEED_FACTOR;
-                }
-                else {
-                    p.v = original_speed;
-                }
-
-                rollInPaths[i][j] = p;  // 最终输出的
+    j_start = max(path_length - seg_num_2 - seg_num_1, int(smoothing_start_index));
+    for (int j = j_start; j < path_length - seg_num_2; j++) {
+        int origin_path_index = min(int(j), (int)originalCenter.size() - 1);
+        p = originalCenter.at(origin_path_index);
+        double original_speed = p.v;
+        for (int i = 0; i < rollOutNumber + 1; i++) {
+            inc_list_inc[i] -= inc_list[i];
+            double d = inc_list_inc[i];
+            p.pos.x = originalCenter.at(origin_path_index).pos.x - d * cos(p.pos.yaw + M_PI_2);
+            p.pos.y = originalCenter.at(origin_path_index).pos.y - d * sin(p.pos.yaw + M_PI_2);
+            if (i != centralTrajectoryIndex) {
+                p.v = original_speed * LANE_CHANGE_SPEED_FACTOR;
             }
+            else {
+                p.v = original_speed;
+            }
+
+            rollInPaths[i][j] = p;  // 最终输出的
         }
     }
+
 
     // smooth path
     for (unsigned int i = 0; i < rollOutNumber + 1; i++) {
@@ -801,7 +723,6 @@ void RolloutGenerator::smoothPath(vector<UtilityNS::WayPoint>& path, double weig
 
 /* 从全局路径截取局部路径，对局部路径插值并计算 angle and cost。*/
 void RolloutGenerator::extractPartFromTrajectory(const vector<UtilityNS::WayPoint>& originalPath,
-    const UtilityNS::WayPoint& currentPos, const double& minDistance,
     const double& waypointDensity, vector<UtilityNS::WayPoint>& extractedPath) {
 
     if (originalPath.size() < 2) {
@@ -809,46 +730,10 @@ void RolloutGenerator::extractPartFromTrajectory(const vector<UtilityNS::WayPoin
     }
 
     extractedPath.clear();
-
-    // 获取轨迹上距离当前位置最近的轨迹点（前方）
-    int close_index = UtilityNS::getNextClosePointIndex(originalPath, currentPos);
-    
-    if (close_index >= originalPath.size() - 1) {
-        close_index = originalPath.size() - 2;
-    }
-    double dis = 0;
-    for (int i = close_index; i >= 0; i--) {
-        // 把 close_index 之前的点（距离 <=2）全部存入 extractedPath
-        extractedPath.insert(extractedPath.begin(), originalPath[i]);
-        
-        // 循环退出条件，距离 >2
-        dis += hypot(originalPath[i].pos.y - originalPath[i + 1].pos.y, 
-            originalPath[i].pos.x - originalPath[i + 1].pos.x);
-        if (dis > 2) {
-            break;
-        }
-    }
-
-    dis = 0;
-    for (int i = close_index + 1; i < (int)originalPath.size(); i++) {
-        // 把 close_index 之后的点（距离 <=10）全部存入 extractedPath
+    for (int i = 0; i < (int)originalPath.size(); i++) {
         extractedPath.push_back(originalPath[i]);
-
-        // 循环退出条件，距离 >10
-        dis += hypot(originalPath[i].pos.y - originalPath[i + 1].pos.y,
-            originalPath[i].pos.x - originalPath[i + 1].pos.x);
-        if (dis > minDistance) {  // 10
-            break;
-        }
     }
 
-    if (extractedPath.size() < 2) {
-        cout << endl << "[loacal_planner_node] Extracted Rollout Path is too Small, Size = "
-            << extractedPath.size() << endl;
-        return;
-    }
-    // 可视化
-    UtilityNS::visualLaneInRviz(extractedPath, pub_testLane);
     // 根据 waypointDensity 对 extractedPath 插值
     fixPathDensity(extractedPath, waypointDensity);  // 0.1
     // 利用前后点位置计算每个路径点的 yaw (0~2pi)

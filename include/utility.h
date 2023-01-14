@@ -126,8 +126,6 @@ public:
     float _pathResolution;
     float _maxPathDistance;
     float _rollOutDensity;
-    int   _rollOutNumber;
-    int   _rollOutCenter;
     
     ParamServer() {
         nh.param<std::string>("/robot_id", robot_id, "roboat");
@@ -149,8 +147,7 @@ public:
         nh.param<float>("roboat_planning/_pathResolution",    _pathResolution,    0.1);  // 0.1
         nh.param<float>("roboat_planning/_maxPathDistance",   _maxPathDistance,   10.0); // 10.0
         nh.param<float>("roboat_planning/_rollOutDensity",    _rollOutDensity,    0.1);  // 0.1
-        nh.param<int>("roboat_planning/_rollOutNumber",       _rollOutNumber,     15);   // 15
-        _rollOutCenter = _rollOutNumber / 2;  // 7
+
         if (_maxPathDistance < _sensorRangeLimitMax * 2.0) {
             ROS_WARN("Assigned length for generating alternative paths might not be long enough!");
         }

@@ -20,4 +20,4 @@ roboat_planning:
   _pathResolution: 0.1
   _maxPathDistance: 10.0
   _rollOutDensity: 0.1
-  _rollOutNumber: 15
+  _rollOutNumber: 35

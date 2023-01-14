@@ -8,6 +8,7 @@ int main(int argc, char** argv) {
     while (ros::ok()) {
         os.cloudHandler();
         os.pathHandler();
+        os.generatePath();
         ros::spinOnce();
         rate.sleep();
     }
